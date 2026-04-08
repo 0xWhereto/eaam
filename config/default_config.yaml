@@ -1,0 +1,36 @@
+graph:
+  backend: memory
+  persist_path: ~/.eaam/data/graph
+
+emotion:
+  model: j-hartmann/emotion-english-distilroberta-base
+  use_transformer: true
+
+embedding:
+  model: all-MiniLM-L6-v2
+  dimensions: 384
+
+retrieval:
+  alpha: 0.35     # semantic similarity weight
+  beta: 0.30      # emotional congruence weight
+  gamma: 0.20     # base activation weight
+  delta: 0.15     # spreading activation weight
+  activation_hops: 2
+  activation_decay: 0.6
+  candidate_pool: 20
+
+consolidation:
+  interval_hours: 6.0
+  decay_rate: 0.95
+  strengthen_threshold: 0.7
+  prune_edge_threshold: 0.15
+  min_cluster_size: 3
+
+server:
+  host: 0.0.0.0
+  port: 8800
+  upstream_url: http://localhost:11434
+
+vector:
+  backend: chroma
+  persist_path: ~/.eaam/data/vectors

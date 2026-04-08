@@ -1,0 +1,127 @@
+# EAAM Emotional Surfaces Contract
+# Modeled after xoanonxoloop's overnight.yaml — each surface is a bounded
+# region of the parameter space with declared invariants, allowed ranges,
+# and validation criteria.
+#
+# A surface can only be mutated within its bounds. It cools down after
+# consecutive no-benefit outcomes. It freezes after a successful commit.
+
+version: "0.1.0"
+
+defaults:
+  attempt_limit: 5          # max attempts per surface per objective
+  cooldown_threshold: 2     # consecutive no-benefit before cooling
+  repair_turns: 1           # retry budget on validation failure
+  max_mutation_magnitude: 0.15
+
+surfaces:
+  # --- Spreading Activation Surface ---
+  spreading:
+    description: "Controls how activation propagates through the memory graph"
+    risk: guarded
+    parameters:
+      hop_decay:
+        range: [0.10, 0.60]
+        default: 0.30
+        description: "Decay factor per hop — lower = less saturation"
+      emotion_boost_spreading:
+        range: [0.05, 0.60]
+        default: 0.30
+        description: "How much emotional congruence amplifies spreading"
+      spreading_cap:
+        range: [0.30, 0.90]
+        default: 0.70
+        description: "Hard ceiling on spreading activation scores"
+      fan_out_limit:
+        range: [2, 8]
+        type: int
+        default: 4
+        description: "Max edges traversed per node per hop"
+    invariants:
+      - "spreading scores must not saturate to 1.0"
+      - "cross-domain leaps must remain possible"
+    affects_categories: [cross_domain_leap, spreading]
+
+  # --- Amygdalar Pathway Surface ---
+  amygdalar:
+    description: "Controls emotional priming — mood-congruent recall"
+    risk: safe
+    parameters:
+      amygdalar_emo_threshold:
+        range: [0.45, 0.85]
+        default: 0.70
+        description: "Min emotional similarity to qualify"
+      amygdalar_emo_weight:
+        range: [0.40, 0.95]
+        default: 0.70
+        description: "Weight of emotional similarity in scoring"
+      amygdalar_act_weight:
+        range: [0.05, 0.55]
+        default: 0.30
+        description: "Weight of activation level in scoring"
+    invariants:
+      - "emo_weight + act_weight should approximate 1.0"
+      - "must surface emotionally congruent memories"
+    affects_categories: [emotional_congruence, mood_congruent]
+
+  # --- Involuntary Pathway Surface ---
+  involuntary:
+    description: "Controls the Proust effect — spontaneous high-arousal recall"
+    risk: guarded
+    parameters:
+      involuntary_fire_threshold:
+        range: [0.15, 0.55]
+        default: 0.35
+        description: "Min score for involuntary memory to fire"
+      involuntary_arousal_weight:
+        range: [0.10, 0.50]
+        default: 0.23
+        description: "How much arousal contributes to firing"
+      involuntary_activation_weight:
+        range: [0.20, 0.60]
+        default: 0.40
+        description: "How much base activation contributes"
+      involuntary_cue_weight:
+        range: [0.10, 0.50]
+        default: 0.30
+        description: "How much cue match contributes"
+    invariants:
+      - "weights should sum to approximately 1.0"
+      - "must be capable of surfacing out-of-context memories"
+    affects_categories: [activation, cross_domain_leap]
+
+  # --- Merge Strategy Surface ---
+  merge:
+    description: "Controls how pathway results are combined"
+    risk: safe
+    parameters:
+      hippocampal_ratio:
+        range: [0.15, 0.60]
+        default: 0.33
+        description: "Fraction of result slots for semantic pathway"
+    invariants:
+      - "every active pathway must get at least 1 slot"
+      - "semantic results must not be completely crowded out"
+    affects_categories: [semantic_baseline, emotional_congruence, mood_congruent]
+
+  # --- Encoding Surface ---
+  encoding:
+    description: "Controls how memories are tagged and edges are built"
+    risk: guarded
+    parameters:
+      semantic_edge_threshold:
+        range: [0.15, 0.50]
+        default: 0.30
+        description: "Min cosine similarity to create semantic edge"
+      emotional_edge_threshold:
+        range: [0.55, 0.90]
+        default: 0.75
+        description: "Min VAD similarity to create emotional edge"
+      emotional_semantic_filter:
+        range: [0.30, 0.75]
+        default: 0.50
+        description: "Only create emotional edges when semantic sim is below this"
+    invariants:
+      - "must not create so many edges that graph becomes fully connected"
+      - "must preserve cross-domain emotional links"
+    affects_categories: [cross_domain_leap, semantic_baseline]
