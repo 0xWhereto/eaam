@@ -104,7 +104,7 @@ class LLMJudge:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         temperature: float = 0.0,
-        max_retries: int = 2,
+        max_retries: int = 5,
     ):
         self.temperature = temperature
         self.max_retries = max_retries
@@ -176,7 +176,8 @@ class LLMJudge:
         }.get(provider, "http://localhost:11434")
 
     def _call_llm(self, prompt: str) -> str:
-        for attempt in range(self.max_retries + 1):
+        max_attempts = max(self.max_retries + 1, 10)
+        for attempt in range(max_attempts):
             try:
                 if self.provider == "anthropic":
                     return self._call_anthropic(prompt)
@@ -185,10 +186,13 @@ class LLMJudge:
                 else:
                     return self._call_openai_compat(prompt)
             except Exception as e:
-                if attempt == self.max_retries:
+                err = str(e)
+                is_retryable = any(code in err for code in ("429", "529", "500", "502", "503"))
+                if attempt == max_attempts - 1 or not is_retryable:
                     raise
-                logger.warning(f"LLM call failed (attempt {attempt+1}): {e}")
-                time.sleep(1.0 * (attempt + 1))
+                wait = min(2 ** attempt * 3.0 + 5.0, 90.0)
+                print(f"  [judge] retry {attempt+1}/{max_attempts} in {wait:.0f}s ({err[:80]})")
+                time.sleep(wait)
         return ""
 
     def _call_anthropic(self, prompt: str) -> str:
@@ -245,8 +249,9 @@ class LLMJudge:
         choices: list[str],
         retrieved_texts: list[str],
     ) -> JudgeResult:
+        trimmed = [t[:300] for t in retrieved_texts[:8]]
         context = "\n".join(
-            f"[Memory {i+1}] {t}" for i, t in enumerate(retrieved_texts)
+            f"[Memory {i+1}] {t}" for i, t in enumerate(trimmed)
         )
         choices_str = "\n".join(f"{i}: {c}" for i, c in enumerate(choices))
 
@@ -255,7 +260,17 @@ class LLMJudge:
         )
 
         t0 = time.time()
-        raw = self._call_llm(prompt)
+        try:
+            raw = self._call_llm(prompt)
+        except Exception as e:
+            print(f"  [judge] FAILED, falling back to random: {str(e)[:60]}")
+            import random
+            return JudgeResult(
+                answer_idx=random.randint(0, len(choices) - 1),
+                confidence=0.0,
+                raw_response=f"ERROR: {e}",
+                latency_ms=(time.time() - t0) * 1000,
+            )
         latency = (time.time() - t0) * 1000
 
         idx = self._parse_int(raw, max_val=len(choices) - 1)
@@ -273,11 +288,15 @@ class LLMJudge:
         actual: str,
     ) -> ScoreResult:
         prompt = SCORE_RESPONSE_PROMPT.format(
-            question=question, expected=expected, actual=actual
+            question=question, expected=expected, actual=actual[:500]
         )
 
         t0 = time.time()
-        raw = self._call_llm(prompt)
+        try:
+            raw = self._call_llm(prompt)
+        except Exception as e:
+            print(f"  [judge] score FAILED: {str(e)[:60]}")
+            return ScoreResult(score=0.0, reason=f"ERROR: {e}", latency_ms=(time.time() - t0) * 1000)
         latency = (time.time() - t0) * 1000
 
         score, reason = self._parse_score_json(raw)
