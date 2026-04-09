@@ -8,13 +8,17 @@ For each question:
 2. The question is used as a retrieval query
 3. Retrieved memories are matched against the 10 answer choices
 4. The choice with the highest overlap with retrieved text wins
+   (or an LLM judge picks the answer when --judge is enabled)
 
 Published baselines:
   - Mem0:        66.9%
   - Letta:       74.0%
   - OpenAI:      52.9%
 
-Usage: python3 tests/bench_locomo.py [--limit N] [--conversations N]
+Usage:
+  python3 tests/bench_locomo.py [--limit N] [--conversations N]
+  python3 tests/bench_locomo.py --judge                  # use LLM judge
+  python3 tests/bench_locomo.py --judge --judge-model gpt-4o-mini
 """
 
 from __future__ import annotations
@@ -32,6 +36,16 @@ from eaam.engine.encoder import EncodingPipeline
 from eaam.engine.retriever import AssociativeRetriever
 from eaam.models import Edge, EdgeType
 from eaam.store.memory_store import MemoryStore
+
+# Optional LLM judge — imported lazily
+_judge_instance = None
+
+def get_judge(model: str | None = None):
+    global _judge_instance
+    if _judge_instance is None:
+        from llm_judge import LLMJudge
+        _judge_instance = LLMJudge(model=model)
+    return _judge_instance
 
 
 # ============================================================================
@@ -90,6 +104,13 @@ def pick_answer(retrieved_texts: list[str], choices: list[str]) -> int:
     return best_idx
 
 
+def pick_answer_llm(retrieved_texts: list[str], question: str, choices: list[str], model: str | None = None) -> int:
+    """Use an LLM judge to pick the best answer from retrieved context."""
+    judge = get_judge(model)
+    result = judge.pick_answer(question, choices, retrieved_texts)
+    return result.answer_idx
+
+
 def pick_answer_from_summaries(summaries: list[str], question: str, choices: list[str]) -> int:
     """For RAG baseline: pick answer from session summaries using question + choice matching."""
     blob = " ".join(summaries).lower()
@@ -117,11 +138,17 @@ def pick_answer_from_summaries(summaries: list[str], question: str, choices: lis
 # BENCHMARK RUNNER
 # ============================================================================
 
-def run_benchmark(max_conversations: int = 2, max_questions_per_conv: int = 100):
+def run_benchmark(max_conversations: int = 2, max_questions_per_conv: int = 100,
+                   use_judge: bool = False, judge_model: str | None = None):
     """Run LoCoMo MC10 on both EAAM and baseline."""
 
     print("=" * 70)
     print("LoCoMo MC10 BENCHMARK: EAAM vs Baseline")
+    if use_judge:
+        judge = get_judge(judge_model)
+        print(f"Answer selection: LLM JUDGE ({judge.provider}/{judge.model})")
+    else:
+        print("Answer selection: HEURISTIC (word overlap)")
     print("=" * 70)
 
     data = load_locomo()
@@ -217,10 +244,13 @@ def run_benchmark(max_conversations: int = 2, max_questions_per_conv: int = 100)
             # EAAM: retrieve and pick answer
             eaam_results = retriever.retrieve(query=question, k=10)
             eaam_texts = [r.memory.content for r in eaam_results]
-            eaam_pick = pick_answer(eaam_texts, choices)
 
-            # RAG baseline: use session summaries (simulates basic RAG)
-            rag_pick = pick_answer_from_summaries(summaries, question, choices)
+            if use_judge:
+                eaam_pick = pick_answer_llm(eaam_texts, question, choices, judge_model)
+                rag_pick = pick_answer_llm(summaries, question, choices, judge_model)
+            else:
+                eaam_pick = pick_answer(eaam_texts, choices)
+                rag_pick = pick_answer_from_summaries(summaries, question, choices)
 
             # Random baseline
             import random
@@ -280,8 +310,10 @@ def run_benchmark(max_conversations: int = 2, max_questions_per_conv: int = 100)
         print(f"  {qtype:<25} {ea:>7.1f}% {ra:>7.1f}% {r['total']:>8}")
 
     # Save results
+    method = "LLM judge" if use_judge else "heuristic (word overlap)"
     result = {
         "benchmark": "LoCoMo MC10",
+        "method": method,
         "total_questions": total,
         "conversations_evaluated": len(conv_ids),
         "eaam_accuracy": eaam_acc,
@@ -289,11 +321,13 @@ def run_benchmark(max_conversations: int = 2, max_questions_per_conv: int = 100)
         "random_accuracy": random_acc,
         "by_type": {t: {k: v for k, v in r.items()} for t, r in type_results.items()},
     }
+    suffix = "_llm" if use_judge else ""
     out_path = _ROOT / "results"
     out_path.mkdir(exist_ok=True)
-    with open(out_path / "locomo_results.json", "w") as f:
+    fname = f"locomo_results{suffix}.json"
+    with open(out_path / fname, "w") as f:
         json.dump(result, f, indent=2)
-    print(f"\n  Results saved to results/locomo_results.json")
+    print(f"\n  Results saved to results/{fname}")
 
 
 if __name__ == "__main__":
@@ -301,5 +335,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--conversations", type=int, default=2)
     parser.add_argument("--limit", type=int, default=100, help="Max questions per conversation")
+    parser.add_argument("--judge", action="store_true", help="Use LLM judge instead of heuristic")
+    parser.add_argument("--judge-model", type=str, default=None, help="LLM model for judge")
     args = parser.parse_args()
-    run_benchmark(max_conversations=args.conversations, max_questions_per_conv=args.limit)
+    run_benchmark(
+        max_conversations=args.conversations,
+        max_questions_per_conv=args.limit,
+        use_judge=args.judge,
+        judge_model=args.judge_model,
+    )
