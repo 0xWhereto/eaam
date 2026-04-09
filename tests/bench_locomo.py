@@ -28,7 +28,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
+_TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(_TESTS))
 
 from eaam.config import EAAMConfig
 from eaam.emotion.encoder import EmotionEncoder

@@ -31,7 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
+_TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(_TESTS))
 
 from eaam.config import EAAMConfig
 from eaam.emotion.encoder import EmotionEncoder
@@ -281,7 +283,7 @@ def run_benchmark(
 
             if session_idx % consolidate_every == 0:
                 print(f"  Running consolidation at session {session_idx}...")
-                consolidator.consolidate(generate_reflections=True)
+                consolidator.run(generate_reflections=True)
 
         # Evaluate questions for this phase
         ckpt_questions = questions_by_phase.get(phase, [])
