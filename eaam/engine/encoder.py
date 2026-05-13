@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from eaam.emotion.encoder import EmotionEncoder
 from eaam.models import Edge, EdgeType, Memory, VAD
@@ -18,16 +19,76 @@ logger = logging.getLogger(__name__)
 # Time window for temporal associations (seconds)
 TEMPORAL_WINDOW = 600  # 10 minutes
 
+Redactor = Callable[[str], str]
+
+_AWS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
+_API_KEY_RE = re.compile(r"\b(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,})\b")
+_GITHUB_TOKEN_RE = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+_SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+
+
+def _is_luhn_valid(number: str) -> bool:
+    """Return whether a digit string satisfies the Luhn checksum."""
+    if len(number) < 13 or len(number) > 19:
+        return False
+
+    total = 0
+    parity = len(number) % 2
+    for index, char in enumerate(number):
+        digit = int(char)
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
+
+
+def _redact_credit_cards(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        digits = re.sub(r"\D", "", match.group(0))
+        if _is_luhn_valid(digits):
+            return "[REDACTED_CREDIT_CARD]"
+        return match.group(0)
+
+    return _CARD_CANDIDATE_RE.sub(replace, text)
+
+
+def redact_sensitive_content(content: str) -> str:
+    """Redact common secrets and PII before content enters long-term memory."""
+    redacted = _redact_credit_cards(content)
+    replacements = (
+        (_AWS_KEY_RE, "[REDACTED_AWS_KEY]"),
+        (_API_KEY_RE, "[REDACTED_API_KEY]"),
+        (_GITHUB_TOKEN_RE, "[REDACTED_GITHUB_TOKEN]"),
+        (_JWT_RE, "[REDACTED_JWT]"),
+        (_SSN_RE, "[REDACTED_SSN]"),
+    )
+
+    for pattern, marker in replacements:
+        redacted = pattern.sub(marker, redacted)
+
+    return redacted
+
 
 class EncodingPipeline:
     """Encodes new text into the memory system with emotional tagging and association building."""
 
-    def __init__(self, store: MemoryStore, emotion_encoder: EmotionEncoder, config: EAAMConfig | None = None):
+    def __init__(
+        self,
+        store: MemoryStore,
+        emotion_encoder: EmotionEncoder,
+        config: EAAMConfig | None = None,
+        redactor: Redactor | None = redact_sensitive_content,
+    ):
         from eaam.config import EAAMConfig
 
         self.store = store
         self.emotion = emotion_encoder
         self.config = config or EAAMConfig()
+        self.redactor = redactor
 
     def encode(
         self,
@@ -49,6 +110,15 @@ class EncodingPipeline:
         # Validate input
         if not content or not content.strip():
             raise ValueError("Cannot encode empty content")
+
+        if self.redactor is not None:
+            redacted_content = self.redactor(content)
+            if redacted_content != content:
+                logger.info("Sensitive content redacted before memory encoding")
+            content = redacted_content
+
+        if not content or not content.strip():
+            raise ValueError("Cannot encode empty content after redaction")
 
         # Step 1: Emotion detection
         if override_emotion is not None:
